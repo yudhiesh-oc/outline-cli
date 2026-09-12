@@ -7,25 +7,11 @@ import (
 	"io"
 )
 
-var getFields = []string{"id", "title", "url", "text", "collectionId", "parentDocumentId", "updatedAt", "revision", "revisionCount", "publishedAt", "archivedAt", "deletedAt"}
-
-var listFields = []string{"id", "title", "url", "collectionId", "parentDocumentId", "updatedAt", "publishedAt", "archivedAt"}
-
-var collectionsFields = []string{"id", "name", "url", "description", "permission", "documentsCount"}
-
-var usersFields = []string{"id", "name", "email", "role", "isSuspended"}
-
-var templatesFields = []string{"id", "title", "collectionId", "updatedAt"}
-
-var commentFields = []string{"id", "documentId", "parentCommentId", "text", "createdBy", "createdAt", "updatedAt", "resolvedAt", "resolvedBy"}
-
-var defaultFields = []string{"id", "title", "url", "success", "updatedAt", "revision", "revisionCount", "publishedAt", "archivedAt", "deletedAt"}
-
-func emit(w io.Writer, command string, raw bool, data json.RawMessage) error {
+func emit(w io.Writer, cmd command, raw bool, data json.RawMessage) error {
 	data = bytes.TrimSpace(data)
-	if !raw && command != "api" {
+	if !raw && cmd != commandAPI {
 		var err error
-		data, err = summarize(command, data)
+		data, err = summarize(cmd, data)
 		if err != nil {
 			return fmt.Errorf("formatting response: %w", err)
 		}
@@ -44,39 +30,38 @@ func emit(w io.Writer, command string, raw bool, data json.RawMessage) error {
 	return nil
 }
 
-func summarize(command string, data json.RawMessage) (json.RawMessage, error) {
-	if command == "tree" || string(data) == "null" {
+func summarize(cmd command, data json.RawMessage) (json.RawMessage, error) {
+	if cmd == commandTree || string(data) == "null" {
 		return data, nil
 	}
 	if len(data) > 0 && data[0] == '[' {
-		return summarizeArray(command, data)
+		return summarizeArray(cmd, data)
 	}
 	var object map[string]json.RawMessage
 	if err := json.Unmarshal(data, &object); err != nil {
 		return nil, err
 	}
-	if command == "move" {
+	switch cmd {
+	case commandMove:
 		return summarizeMove(object)
-	}
-	if command == "search" {
+	case commandSearch:
 		return summarizeSearch(object)
-	}
-	if command == "comments" || command == "comment" {
+	case commandComments, commandComment:
 		return summarizeComments(object)
 	}
-	return json.Marshal(selectFields(object, projectionFields(command)...))
+	return json.Marshal(selectFields(object, cmd.projection()...))
 }
 
 // summarizeArray projects every element of a JSON array with the same rules,
 // preserving the array shape and erroring on the first failing element.
-func summarizeArray(command string, data json.RawMessage) (json.RawMessage, error) {
+func summarizeArray(cmd command, data json.RawMessage) (json.RawMessage, error) {
 	var items []json.RawMessage
 	if err := json.Unmarshal(data, &items); err != nil {
 		return nil, err
 	}
 	for i, item := range items {
 		var err error
-		items[i], err = summarize(command, item)
+		items[i], err = summarize(cmd, item)
 		if err != nil {
 			return nil, err
 		}
@@ -91,7 +76,7 @@ func summarizeMove(object map[string]json.RawMessage) (json.RawMessage, error) {
 	if !ok {
 		return nil, fmt.Errorf("move response is missing documents")
 	}
-	documents, err := summarize("list", documents)
+	documents, err := summarize(commandList, documents)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +90,7 @@ func summarizeSearch(object map[string]json.RawMessage) (json.RawMessage, error)
 	if !ok {
 		return nil, fmt.Errorf("search hit is missing document")
 	}
-	document, err := summarize("list", document)
+	document, err := summarize(commandList, document)
 	if err != nil {
 		return nil, err
 	}
@@ -127,30 +112,13 @@ func summarizeComments(object map[string]json.RawMessage) (json.RawMessage, erro
 	for _, field := range []string{"createdBy", "resolvedBy"} {
 		if user, ok := result[field]; ok && string(user) != "null" {
 			var err error
-			result[field], err = summarize("users", user)
+			result[field], err = summarize(commandUsers, user)
 			if err != nil {
 				return nil, err
 			}
 		}
 	}
 	return json.Marshal(result)
-}
-
-func projectionFields(command string) []string {
-	switch command {
-	case "get":
-		return getFields
-	case "list":
-		return listFields
-	case "collections":
-		return collectionsFields
-	case "users":
-		return usersFields
-	case "templates":
-		return templatesFields
-	default:
-		return defaultFields
-	}
 }
 
 func selectFields(object map[string]json.RawMessage, fields ...string) map[string]json.RawMessage {

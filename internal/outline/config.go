@@ -15,6 +15,13 @@ import (
 	"time"
 )
 
+// Environment variables read by FromEnv and ConfigPath.
+const (
+	envURL    = "OUTLINE_URL"
+	envAPIKey = "OUTLINE_API_KEY"
+	envConfig = "OUTLINE_CONFIG"
+)
+
 type config struct {
 	URL    string `json:"url"`
 	APIKey string `json:"apiKey"`
@@ -23,12 +30,12 @@ type config struct {
 // ConfigPath returns OUTLINE_CONFIG or the OS user config directory's
 // outline/config.json. Resolving the path does not read credentials.
 func ConfigPath() (string, error) {
-	if path := strings.TrimSpace(os.Getenv("OUTLINE_CONFIG")); path != "" {
+	if path := strings.TrimSpace(os.Getenv(envConfig)); path != "" {
 		return path, nil
 	}
 	dir, err := os.UserConfigDir()
 	if err != nil {
-		return "", fmt.Errorf("cannot locate Outline config: %w; set OUTLINE_CONFIG or both OUTLINE_URL and OUTLINE_API_KEY", err)
+		return "", fmt.Errorf("cannot locate Outline config: %w; set %s or both %s and %s", err, envConfig, envURL, envAPIKey)
 	}
 	return filepath.Join(dir, "outline", "config.json"), nil
 }
@@ -37,24 +44,24 @@ func ConfigPath() (string, error) {
 // A saved API key is used only with its saved workspace URL. A complete env
 // pair bypasses the default config; an explicitly selected config is checked.
 func FromEnv() (*Client, error) {
-	envURL := strings.TrimSpace(os.Getenv("OUTLINE_URL"))
-	envKey := strings.TrimSpace(os.Getenv("OUTLINE_API_KEY"))
-	explicitConfig := strings.TrimSpace(os.Getenv("OUTLINE_CONFIG")) != ""
+	envURLValue := strings.TrimSpace(os.Getenv(envURL))
+	envKey := strings.TrimSpace(os.Getenv(envAPIKey))
+	explicitConfig := strings.TrimSpace(os.Getenv(envConfig)) != ""
 	var saved config
-	if envURL == "" || envKey == "" || explicitConfig {
+	if envURLValue == "" || envKey == "" || explicitConfig {
 		var err error
 		saved, err = readConfig(explicitConfig)
 		if err != nil {
 			return nil, err
 		}
 	}
-	baseURL, err := workspaceURL(cmp.Or(envURL, saved.URL))
+	baseURL, err := workspaceURL(cmp.Or(envURLValue, saved.URL))
 	if err != nil {
 		return nil, err
 	}
 	token := cmp.Or(envKey, strings.TrimSpace(saved.APIKey))
 	if token == "" {
-		return nil, fmt.Errorf("no API key: set OUTLINE_API_KEY or apiKey in the Outline config file")
+		return nil, fmt.Errorf("no API key: set %s or apiKey in the Outline config file", envAPIKey)
 	}
 	if strings.ContainsAny(token, " \t\r\n") {
 		return nil, fmt.Errorf("API key must not contain whitespace")
@@ -65,7 +72,7 @@ func FromEnv() (*Client, error) {
 			return nil, fmt.Errorf("a saved apiKey requires a valid url in the same config file")
 		}
 		if baseURL != savedURL {
-			return nil, fmt.Errorf("OUTLINE_URL differs from the saved workspace; also set OUTLINE_API_KEY or select a matching OUTLINE_CONFIG")
+			return nil, fmt.Errorf("%s differs from the saved workspace; also set %s or select a matching %s", envURL, envAPIKey, envConfig)
 		}
 	}
 	return &Client{
