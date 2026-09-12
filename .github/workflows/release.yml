@@ -73,4 +73,4 @@ jobs:
           git -C "$tapdir" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git -C "$tapdir" add -A
           git -C "$tapdir" commit -m "Update outline-cli to ${version}"
-          git -C "$tapdir" push origin main
+          git -C "$tapdir" -c http.extraheader="AUTHORIZATION: bearer $HOMEBREW_TAP_GITHUB_TOKEN" push origin main
