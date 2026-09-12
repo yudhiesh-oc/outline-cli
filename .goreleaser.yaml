@@ -40,19 +40,3 @@ release:
   preflight:
     fail_on_error: true
 
-homebrew_casks:
-  - name: outline-cli
-    ids:
-      - default
-    binaries:
-      - outline
-    directory: Casks
-    homepage: https://github.com/yudhiesh-oc/outline-cli
-    description: Command-line client for the Outline knowledge base
-    license: MIT
-    skip_upload: auto
-    repository:
-      owner: yudhiesh-oc
-      name: homebrew-outline-cli
-      branch: main
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
