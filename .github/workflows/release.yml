@@ -30,3 +30,47 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      - name: Publish Homebrew formula
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          workdir="$(mktemp -d)"
+          trap 'rm -rf "$workdir"' EXIT
+
+          source_url="https://github.com/yudhiesh-oc/outline-cli/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
+          source_sha="$(curl --fail --silent --show-error --location "$source_url" | sha256sum | cut -d' ' -f1)"
+
+          tapdir="$workdir/tap"
+          GH_TOKEN="$HOMEBREW_TAP_GITHUB_TOKEN" gh repo clone yudhiesh-oc/homebrew-outline-cli "$tapdir"
+          mkdir -p "$tapdir/Formula"
+          rm -f "$tapdir/Casks/outline-cli.rb" "$tapdir/Casks/.gitkeep"
+          cat > "$tapdir/Formula/outline-cli.rb" <<EOF
+          class OutlineCli < Formula
+            desc "Command-line client for the Outline knowledge base"
+            homepage "https://github.com/yudhiesh-oc/outline-cli"
+            url "${source_url}"
+            sha256 "${source_sha}"
+            license "MIT"
+            depends_on "go" => :build
+
+            def install
+              ldflags = "-s -w -X github.com/yudhiesh-oc/outline-cli/internal/cli.version=#{version}"
+              system "go", "build", "-ldflags", ldflags, "-o", bin/"outline", "./cmd/outline"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/outline --version")
+            end
+          end
+          EOF
+
+          git -C "$tapdir" config user.name "github-actions[bot]"
+          git -C "$tapdir" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$tapdir" add -A
+          git -C "$tapdir" commit -m "Update outline-cli to ${version}"
+          git -C "$tapdir" push origin main
