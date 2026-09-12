@@ -178,14 +178,34 @@ func newCommand(stdout, stderr io.Writer) *urfave.Command {
 				Flags:  []urfave.Flag{&urfave.StringFlag{Name: "data", Usage: "JSON request object"}},
 				Action: cmdAPI,
 			},
+			{
+				Name: commandSkill.String(), Usage: "Install the bundled Outline agent skill into an LLM harness",
+				Description: fmt.Sprintf("Harnesses and their skill directories:\n   %s", strings.Join(harnessNames(), ", ")),
+				Commands: []*urfave.Command{
+					{
+						Name: commandSkillInstall.String(), Usage: "Write the outline skill into the harness skills directory", ArgsUsage: "<harness>",
+						Before: argumentCount(1, 1),
+						Flags:  []urfave.Flag{&urfave.BoolFlag{Name: "force", Usage: "Overwrite an existing skill file"}},
+						Action: cmdSkillInstall,
+					},
+				},
+			},
 		},
 	}
 	for _, subcommand := range cmd.Commands {
-		subcommand.OnUsageError = onUsageError
-		// Leaf commands take document text as positionals, including the word "help".
-		subcommand.HideHelpCommand = true
+		prepareCommand(subcommand)
 	}
 	return cmd
+}
+
+// prepareCommand applies the leaf-command conventions to a command and its descendants.
+func prepareCommand(c *urfave.Command) {
+	c.OnUsageError = onUsageError
+	// Leaf commands take document text as positionals, including the word "help".
+	c.HideHelpCommand = true
+	for _, child := range c.Commands {
+		prepareCommand(child)
+	}
 }
 
 func onUsageError(_ context.Context, _ *urfave.Command, err error, _ bool) error {

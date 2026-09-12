@@ -279,7 +279,7 @@ func TestHelpAndMissingCredentialsNeverCallAPI(t *testing.T) {
 	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) { t.Error("unexpected request") })
 	t.Setenv("OUTLINE_API_KEY", "")
 	t.Setenv("HOME", t.TempDir())
-	for _, command := range []string{"", "search", "get", "list", "create", "update", "move", "archive", "restore", "delete", "collections", "tree", "comments", "comment", "users", "templates", "api"} {
+	for _, command := range []string{"", "search", "get", "list", "create", "update", "move", "archive", "restore", "delete", "collections", "tree", "comments", "comment", "users", "templates", "api", "skill"} {
 		args := []string{"--help"}
 		if command != "" {
 			args = append([]string{command}, args...)
