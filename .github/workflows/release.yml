@@ -61,10 +61,12 @@ jobs:
             def install
               ldflags = "-s -w -X github.com/yudhiesh-oc/outline-cli/internal/cli.version=#{version}"
               system "go", "build", "-ldflags", ldflags, "-o", bin/"outline", "./cmd/outline"
+              bin.install_symlink "outline" => "ol"
             end
 
             test do
               assert_match version.to_s, shell_output("#{bin}/outline --version")
+              assert_match version.to_s, shell_output("#{bin}/ol --version")
             end
           end
           EOF

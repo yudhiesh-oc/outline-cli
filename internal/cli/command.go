@@ -21,6 +21,10 @@ const (
 	commandUsers       command = "users"
 	commandTemplates   command = "templates"
 	commandAPI         command = "api"
+	commandSkill       command = "skill"
+
+	// commandSkillInstall is nested under commandSkill.
+	commandSkillInstall command = "install"
 )
 
 // String returns the subcommand name.

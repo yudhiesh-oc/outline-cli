@@ -33,17 +33,25 @@ Summaries are returned by default; add `--raw` when the full API response is req
 
 ## Install the Outline skill in LLM harnesses
 
-Use the `ol` abbreviation for the skill installer and select the target harness:
+The CLI ships the Outline skill and writes it into the harness's user-level skills directory:
 
 ```sh
-ol skill install claude-code
-ol skill install codex
-ol skill install cursor
-ol skill install gemini
-ol skill install pi
+outline skill install claude-code
+outline skill install codex
+outline skill install cursor
+outline skill install gemini
+outline skill install pi
 ```
 
-The source skill definition is in [`skill/outline/SKILL.md`](skill/outline/SKILL.md).
+| Harness | Skill path |
+| --- | --- |
+| `claude-code` | `~/.claude/skills/outline/SKILL.md` |
+| `codex` | `~/.codex/skills/outline/SKILL.md` |
+| `cursor` | `~/.cursor/skills/outline/SKILL.md` |
+| `gemini` | `~/.gemini/skills/outline/SKILL.md` |
+| `pi` | `~/.pi/agent/skills/outline/SKILL.md` |
+
+Each command prints the installed path and stops with an error if a skill file already exists; pass `--force` to replace it. Homebrew also installs `ol` as a shortcut, so `ol skill install pi` is equivalent to `outline skill install pi`. The embedded skill source is [`internal/skill/outline/SKILL.md`](internal/skill/outline/SKILL.md).
 
 ## Exit codes
 
