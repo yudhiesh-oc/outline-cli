@@ -17,8 +17,17 @@ import (
 
 var version = "dev"
 
+// uuidRe validates the identifiers accepted for collections and documents.
+var uuidRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// Page-size bounds for list and search pagination.
+const (
+	defaultPageSize = 25
+	maxPageSize     = 100
+)
+
 // Run executes one outline command and returns the process exit code:
-// 0 success, 1 runtime/API failure, 2 usage error.
+// exitSuccess, exitRuntime, or exitUsage.
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	cmd := newCommand(stdout, stderr)
 	if err := cmd.Run(ctx, append([]string{"outline"}, args...)); err != nil {
@@ -26,13 +35,12 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "outline: %v\n", err)
 		}
 		var exit urfave.ExitCoder
-		if errors.As(err, &exit) && (exit.ExitCode() == 2 || exit.ExitCode() == 3) {
-			// urfave uses 3 for an unknown help topic; that is a usage error here.
-			return 2
+		if errors.As(err, &exit) && (exit.ExitCode() == int(exitUsage) || exit.ExitCode() == urfaveHelpExit) {
+			return int(exitUsage)
 		}
-		return 1
+		return int(exitRuntime)
 	}
-	return 0
+	return int(exitSuccess)
 }
 
 func newCommand(stdout, stderr io.Writer) *urfave.Command {
@@ -40,9 +48,9 @@ func newCommand(stdout, stderr io.Writer) *urfave.Command {
 		Name:    "outline",
 		Version: version,
 		Usage:   "Search and manage an Outline workspace; summary JSON on stdout",
-		Description: "Flags may appear before or after arguments; -- ends option parsing.\n" +
-			"Lists return one page by default; --all fails if the 50-page safety limit is reached.\n" +
-			"Configuration: OUTLINE_URL + OUTLINE_API_KEY, or OUTLINE_CONFIG (defaults to the OS config directory).",
+		Description: fmt.Sprintf("Flags may appear before or after arguments; -- ends option parsing.\n"+
+			"Lists return one page by default; --all fails if the %d-page safety limit is reached.\n"+
+			"Configuration: OUTLINE_URL + OUTLINE_API_KEY, or OUTLINE_CONFIG (defaults to the OS config directory).", outline.MaxPages),
 		Writer:    stdout,
 		ErrWriter: stderr,
 		Flags: []urfave.Flag{
@@ -64,35 +72,30 @@ func newCommand(stdout, stderr io.Writer) *urfave.Command {
 		},
 		Commands: []*urfave.Command{
 			{
-				Name: "search", Usage: "Full-text search; hits contain document metadata and context", ArgsUsage: "<query>",
+				Name: commandSearch.String(), Usage: "Full-text search; hits contain document metadata and context", ArgsUsage: "<query>",
 				Before: argumentCount(1, 1),
 				Flags:  append(pagingFlags(), uuidFlag("collection", "Collection UUID to search")),
 				Action: cmdSearch,
 			},
 			{
-				Name: "get", Usage: "Read one document including markdown text", ArgsUsage: "<id-or-urlId>",
+				Name: commandGet.String(), Usage: "Read one document including markdown text", ArgsUsage: "<id-or-urlId>",
 				Before: argumentCount(1, 1),
 				Action: func(ctx context.Context, c *urfave.Command) error {
-					return request(ctx, c, "documents.info", map[string]any{"id": c.Args().First()}, false)
+					return request(ctx, c, commandGet, outline.MethodDocumentsInfo, map[string]any{"id": c.Args().First()}, false)
 				},
 			},
 			{
-				Name: "list", Usage: "List document metadata; use search for full-text queries", ArgsUsage: " ",
+				Name: commandList.String(), Usage: "List document metadata; use search for full-text queries", ArgsUsage: " ",
 				Before: argumentCount(0, 0),
 				Flags: append(pagingFlags(),
 					uuidFlag("collection", "Collection UUID"), uuidFlag("parent", "Parent document UUID"),
 					&urfave.StringFlag{Name: "sort", Usage: "updatedAt|createdAt|title|index"},
-					&urfave.StringFlag{Name: "direction", Usage: "asc|desc", Validator: func(value string) error {
-						if value != "" && !strings.EqualFold(value, "asc") && !strings.EqualFold(value, "desc") {
-							return usageError("--direction must be asc or desc")
-						}
-						return nil
-					}},
+					&urfave.StringFlag{Name: "direction", Usage: "asc|desc"},
 				),
 				Action: cmdList,
 			},
 			{
-				Name: "create", Usage: "Create and publish a document; --publish=false creates a draft", ArgsUsage: "<title>",
+				Name: commandCreate.String(), Usage: "Create and publish a document; --publish=false creates a draft", ArgsUsage: "<title>",
 				Before: argumentCount(1, 1),
 				Flags: []urfave.Flag{
 					uuidFlag("collection", "Collection UUID (required to publish)"), uuidFlag("parent", "Parent document UUID"),
@@ -103,7 +106,7 @@ func newCommand(stdout, stderr io.Writer) *urfave.Command {
 				Action: cmdCreate,
 			},
 			{
-				Name: "update", Usage: "Edit a document; prefer patch to preserve rich formatting", ArgsUsage: "<id>",
+				Name: commandUpdate.String(), Usage: "Edit a document; prefer patch to preserve rich formatting", ArgsUsage: "<id>",
 				Before: argumentCount(1, 1),
 				Flags: []urfave.Flag{
 					&urfave.StringFlag{Name: "title", Usage: "New title"},
@@ -117,7 +120,7 @@ func newCommand(stdout, stderr io.Writer) *urfave.Command {
 				Action: cmdUpdate,
 			},
 			{
-				Name: "move", Usage: "Move or reorder a document; requires --collection or --parent", ArgsUsage: "<id>",
+				Name: commandMove.String(), Usage: "Move or reorder a document; requires --collection or --parent", ArgsUsage: "<id>",
 				Before: argumentCount(1, 1),
 				Flags: []urfave.Flag{
 					uuidFlag("collection", "Target collection UUID"), uuidFlag("parent", "New parent document UUID"),
@@ -126,21 +129,21 @@ func newCommand(stdout, stderr io.Writer) *urfave.Command {
 				Action: cmdMove,
 			},
 			{
-				Name: "archive", Usage: "Archive a document (recoverable)", ArgsUsage: "<id>",
+				Name: commandArchive.String(), Usage: "Archive a document (recoverable)", ArgsUsage: "<id>",
 				Before: argumentCount(1, 1),
 				Action: func(ctx context.Context, c *urfave.Command) error {
-					return request(ctx, c, "documents.archive", map[string]any{"id": c.Args().First()}, false)
+					return request(ctx, c, commandArchive, outline.MethodDocumentsArchive, map[string]any{"id": c.Args().First()}, false)
 				},
 			},
 			{
-				Name: "restore", Usage: "Restore an archived or trashed document", ArgsUsage: "<id>",
+				Name: commandRestore.String(), Usage: "Restore an archived or trashed document", ArgsUsage: "<id>",
 				Before: argumentCount(1, 1),
 				Action: func(ctx context.Context, c *urfave.Command) error {
-					return request(ctx, c, "documents.restore", map[string]any{"id": c.Args().First()}, false)
+					return request(ctx, c, commandRestore, outline.MethodDocumentsRestore, map[string]any{"id": c.Args().First()}, false)
 				},
 			},
 			{
-				Name: "delete", Usage: "Move a document to trash; --permanent cannot be undone", ArgsUsage: "<id>",
+				Name: commandDelete.String(), Usage: "Move a document to trash; --permanent cannot be undone", ArgsUsage: "<id>",
 				Before: argumentCount(1, 1),
 				Flags:  []urfave.Flag{&urfave.BoolFlag{Name: "permanent", Usage: "Destroy permanently (no undo)"}},
 				Action: func(ctx context.Context, c *urfave.Command) error {
@@ -148,29 +151,29 @@ func newCommand(stdout, stderr io.Writer) *urfave.Command {
 					if c.Bool("permanent") {
 						body["permanent"] = true
 					}
-					return request(ctx, c, "documents.delete", body, false)
+					return request(ctx, c, commandDelete, outline.MethodDocumentsDelete, body, false)
 				},
 			},
-			resourceCommand("collections", "List collections", "[name-filter]", "query", false),
+			resourceCommand(commandCollections, outline.MethodCollectionsList, "List collections", "[name-filter]", "query", false),
 			{
-				Name: "tree", Usage: "Read a collection's complete published document hierarchy", ArgsUsage: "<collectionId>",
+				Name: commandTree.String(), Usage: "Read a collection's complete published document hierarchy", ArgsUsage: "<collectionId>",
 				Before: argumentCount(1, 1),
 				Action: func(ctx context.Context, c *urfave.Command) error {
-					return request(ctx, c, "collections.documents", map[string]any{"id": c.Args().First()}, false)
+					return request(ctx, c, commandTree, outline.MethodCollectionsDocuments, map[string]any{"id": c.Args().First()}, false)
 				},
 			},
-			resourceCommand("comments", "List document comments", "<documentId>", "documentId", true),
+			resourceCommand(commandComments, outline.MethodCommentsList, "List document comments", "<documentId>", "documentId", true),
 			{
-				Name: "comment", Usage: "Add a document comment", ArgsUsage: "<documentId> <text>",
+				Name: commandComment.String(), Usage: "Add a document comment", ArgsUsage: "<documentId> <text>",
 				Before: argumentCount(2, 2),
 				Action: func(ctx context.Context, c *urfave.Command) error {
-					return request(ctx, c, "comments.create", map[string]any{"documentId": c.Args().Get(0), "text": c.Args().Get(1)}, false)
+					return request(ctx, c, commandComment, outline.MethodCommentsCreate, map[string]any{"documentId": c.Args().Get(0), "text": c.Args().Get(1)}, false)
 				},
 			},
-			resourceCommand("users", "List workspace users", "[name-or-email-filter]", "query", false),
-			resourceCommand("templates", "List template metadata", "[title-filter]", "query", false),
+			resourceCommand(commandUsers, outline.MethodUsersList, "List workspace users", "[name-or-email-filter]", "query", false),
+			resourceCommand(commandTemplates, outline.MethodTemplatesList, "List template metadata", "[title-filter]", "query", false),
 			{
-				Name: "api", Usage: "Call any JSON REST method; output is always unfiltered", ArgsUsage: "<domain.action>",
+				Name: commandAPI.String(), Usage: "Call any JSON REST method; output is always unfiltered", ArgsUsage: "<domain.action>",
 				Before: argumentCount(1, 1),
 				Flags:  []urfave.Flag{&urfave.StringFlag{Name: "data", Usage: "JSON request object"}},
 				Action: cmdAPI,
@@ -186,11 +189,11 @@ func newCommand(stdout, stderr io.Writer) *urfave.Command {
 }
 
 func onUsageError(_ context.Context, _ *urfave.Command, err error, _ bool) error {
-	return urfave.Exit(err, 2)
+	return urfave.Exit(err, int(exitUsage))
 }
 
 func usageError(format string, args ...any) error {
-	return urfave.Exit(fmt.Sprintf(format, args...), 2)
+	return urfave.Exit(fmt.Sprintf(format, args...), int(exitUsage))
 }
 
 func argumentCount(minimum, maximum int) urfave.BeforeFunc {
@@ -220,10 +223,10 @@ func nonnegative(value int) error {
 
 func pagingFlags() []urfave.Flag {
 	return []urfave.Flag{
-		&urfave.BoolFlag{Name: "all", Usage: "Fetch all pages (up to 50; errors if incomplete)"},
-		&urfave.IntFlag{Name: "limit", Value: 25, Usage: "Page size (1-100)", Validator: func(value int) error {
-			if value < 1 || value > 100 {
-				return usageError("--limit must be 1-100")
+		&urfave.BoolFlag{Name: "all", Usage: fmt.Sprintf("Fetch all pages (up to %d; errors if incomplete)", outline.MaxPages)},
+		&urfave.IntFlag{Name: "limit", Value: defaultPageSize, Usage: fmt.Sprintf("Page size (1-%d)", maxPageSize), Validator: func(value int) error {
+			if value < 1 || value > maxPageSize {
+				return usageError("--limit must be 1-%d", maxPageSize)
 			}
 			return nil
 		}},
@@ -235,20 +238,20 @@ func pageBody(c *urfave.Command) map[string]any {
 	return map[string]any{"limit": c.Int("limit"), "offset": c.Int("offset")}
 }
 
-func resourceCommand(name, usage, argsUsage, key string, required bool) *urfave.Command {
+func resourceCommand(cmd command, method outline.Method, usage, argsUsage, key string, required bool) *urfave.Command {
 	minimum := 0
 	if required {
 		minimum = 1
 	}
 	return &urfave.Command{
-		Name: name, Usage: usage, ArgsUsage: argsUsage,
+		Name: cmd.String(), Usage: usage, ArgsUsage: argsUsage,
 		Before: argumentCount(minimum, 1), Flags: pagingFlags(),
 		Action: func(ctx context.Context, c *urfave.Command) error {
 			body := pageBody(c)
 			if c.NArg() == 1 {
 				body[key] = c.Args().First()
 			}
-			return request(ctx, c, name+".list", body, c.Bool("all"))
+			return request(ctx, c, cmd, method, body, c.Bool("all"))
 		},
 	}
 }
@@ -257,16 +260,28 @@ func cmdSearch(ctx context.Context, c *urfave.Command) error {
 	body := pageBody(c)
 	body["query"] = c.Args().First()
 	putIf(body, "collectionId", c.String("collection"))
-	return request(ctx, c, "documents.search", body, c.Bool("all"))
+	return request(ctx, c, commandSearch, outline.MethodDocumentsSearch, body, c.Bool("all"))
 }
 
 func cmdList(ctx context.Context, c *urfave.Command) error {
 	body := pageBody(c)
 	putIf(body, "collectionId", c.String("collection"))
 	putIf(body, "parentDocumentId", c.String("parent"))
-	putIf(body, "sort", c.String("sort"))
-	putIf(body, "direction", strings.ToUpper(c.String("direction")))
-	return request(ctx, c, "documents.list", body, c.Bool("all"))
+	if value := c.String("sort"); value != "" {
+		field, err := parseSortField(value)
+		if err != nil {
+			return usageError("%v", err)
+		}
+		body["sort"] = field.String()
+	}
+	if value := c.String("direction"); value != "" {
+		direction, err := parseSortDirection(value)
+		if err != nil {
+			return usageError("%v", err)
+		}
+		body["direction"] = direction.String()
+	}
+	return request(ctx, c, commandList, outline.MethodDocumentsList, body, c.Bool("all"))
 }
 
 func cmdCreate(ctx context.Context, c *urfave.Command) error {
@@ -277,7 +292,7 @@ func cmdCreate(ctx context.Context, c *urfave.Command) error {
 	if c.IsSet("text") {
 		body["text"] = c.String("text")
 	}
-	return request(ctx, c, "documents.create", body, false)
+	return request(ctx, c, commandCreate, outline.MethodDocumentsCreate, body, false)
 }
 
 // validateUpdateText checks edit-mode constraints before publishing constraints.
@@ -331,15 +346,15 @@ func cmdUpdate(ctx context.Context, c *urfave.Command) error {
 	putIf(body, "findText", c.String("find"))
 	putIf(body, "collectionId", c.String("collection"))
 	if c.Bool("append") {
-		body["editMode"] = "append"
+		body["editMode"] = editAppend.String()
 	}
 	if c.Bool("patch") {
-		body["editMode"] = "patch"
+		body["editMode"] = editPatch.String()
 	}
 	if c.Bool("publish") {
 		body["publish"] = true
 	}
-	return request(ctx, c, "documents.update", body, false)
+	return request(ctx, c, commandUpdate, outline.MethodDocumentsUpdate, body, false)
 }
 
 func cmdMove(ctx context.Context, c *urfave.Command) error {
@@ -352,13 +367,13 @@ func cmdMove(ctx context.Context, c *urfave.Command) error {
 	if c.IsSet("index") {
 		body["index"] = c.Int("index")
 	}
-	return request(ctx, c, "documents.move", body, false)
+	return request(ctx, c, commandMove, outline.MethodDocumentsMove, body, false)
 }
 
 func cmdAPI(ctx context.Context, c *urfave.Command) error {
-	method := c.Args().First()
-	if !apiMethodRe.MatchString(method) {
-		return usageError("API method must be domain.action")
+	method, err := outline.ParseMethod(c.Args().First())
+	if err != nil {
+		return usageError("%v", err)
 	}
 	body := json.RawMessage("{}")
 	if value := c.String("data"); value != "" {
@@ -368,10 +383,10 @@ func cmdAPI(ctx context.Context, c *urfave.Command) error {
 			return usageError("--data must be a JSON object")
 		}
 	}
-	return request(ctx, c, method, body, false)
+	return request(ctx, c, commandAPI, method, body, false)
 }
 
-func request(ctx context.Context, c *urfave.Command, method string, body any, all bool) error {
+func request(ctx context.Context, c *urfave.Command, cmd command, method outline.Method, body any, all bool) error {
 	client, err := outline.FromEnv()
 	if err != nil {
 		return err
@@ -385,7 +400,7 @@ func request(ctx context.Context, c *urfave.Command, method string, body any, al
 	if err != nil {
 		return err
 	}
-	return emit(c.Root().Writer, c.Name, c.Bool("raw"), data)
+	return emit(c.Root().Writer, cmd, c.Bool("raw"), data)
 }
 
 func putIf(m map[string]any, key, value string) {
@@ -393,6 +408,3 @@ func putIf(m map[string]any, key, value string) {
 		m[key] = value
 	}
 }
-
-var apiMethodRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*\.[A-Za-z][A-Za-z0-9_]*$`)
-var uuidRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)

@@ -13,10 +13,21 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
+)
+
+const (
+	// MaxPages bounds one --all run; Paged fails rather than returning
+	// incomplete results when the request safety limit is reached.
+	MaxPages = 50
+	// maxAttempts bounds requests per call: one original + one 429 retry.
+	maxAttempts = 2
+	// maxRetryDelay caps the Retry-After wait so agents never hang for long.
+	maxRetryDelay = 10 * time.Second
+	// maxPageLimit is the largest page size accepted in a continuation URL.
+	maxPageLimit = 100
 )
 
 // Client posts JSON to the Outline API and unwraps the envelope.
@@ -29,7 +40,7 @@ type Client struct {
 // APIError is a structured failure returned by the Outline API.
 type APIError struct {
 	Status int    // HTTP status code
-	Method string // Outline method, e.g. "documents.search"
+	Method Method // Outline method, e.g. MethodDocumentsSearch
 	Detail string // API error string from the response body
 }
 
@@ -47,7 +58,7 @@ type envelope struct {
 }
 
 // Do posts body to {base}/api/<method> and returns the unwrapped "data".
-func (c *Client) Do(ctx context.Context, method string, body any) (json.RawMessage, error) {
+func (c *Client) Do(ctx context.Context, method Method, body any) (json.RawMessage, error) {
 	env, err := c.post(ctx, method, body)
 	if err != nil {
 		return nil, err
@@ -61,11 +72,9 @@ func (c *Client) Do(ctx context.Context, method string, body any) (json.RawMessa
 	return env.Data, nil
 }
 
-const maxPages = 50
-
 // Paged retains request filters across pages and fails rather than returning
 // incomplete results when the request safety limit is reached.
-func (c *Client) Paged(ctx context.Context, method string, body map[string]any) (json.RawMessage, error) {
+func (c *Client) Paged(ctx context.Context, method Method, body map[string]any) (json.RawMessage, error) {
 	body = maps.Clone(body)
 	if body == nil {
 		body = map[string]any{}
@@ -75,7 +84,7 @@ func (c *Client) Paged(ctx context.Context, method string, body map[string]any) 
 		return nil, err
 	}
 	items := []json.RawMessage{}
-	for range maxPages {
+	for range MaxPages {
 		env, err := c.post(ctx, method, body)
 		if err != nil {
 			return nil, err
@@ -93,7 +102,7 @@ func (c *Client) Paged(ctx context.Context, method string, body map[string]any) 
 			return nil, err
 		}
 	}
-	return nil, fmt.Errorf("%s: pagination reached the %d-page safety limit before completion; narrow the query or use bounded --limit/--offset requests", method, maxPages)
+	return nil, fmt.Errorf("%s: pagination reached the %d-page safety limit before completion; narrow the query or use bounded --limit/--offset requests", method, MaxPages)
 }
 
 // pagination carries the continuation metadata surfaced per page.
@@ -104,7 +113,7 @@ type pagination struct {
 }
 
 // initialOffset validates the requested starting offset, defaulting to zero.
-func initialOffset(method string, body map[string]any) (int, error) {
+func initialOffset(method Method, body map[string]any) (int, error) {
 	value, ok := body["offset"]
 	if !ok {
 		return 0, nil
@@ -117,7 +126,7 @@ func initialOffset(method string, body map[string]any) (int, error) {
 }
 
 // decodePage reads both the result array and its continuation metadata.
-func decodePage(method string, env *envelope) ([]json.RawMessage, pagination, error) {
+func decodePage(method Method, env *envelope) ([]json.RawMessage, pagination, error) {
 	var page []json.RawMessage
 	var p pagination
 	if len(env.Data) == 0 || env.Data[0] != '[' {
@@ -143,9 +152,9 @@ func pageComplete(offset int, page []json.RawMessage, p pagination) bool {
 
 // nextOffset validates the continuation path, advances the request offset, and
 // carries over an explicit page limit from the server.
-func nextOffset(method, nextPath string, offset int, body map[string]any) (int, error) {
+func nextOffset(method Method, nextPath string, offset int, body map[string]any) (int, error) {
 	next, err := url.Parse(nextPath)
-	if err != nil || next.IsAbs() || next.Host != "" || next.Fragment != "" || next.Path != "/api/"+method {
+	if err != nil || next.IsAbs() || next.Host != "" || next.Fragment != "" || next.Path != "/api/"+method.String() {
 		return 0, fmt.Errorf("%s: invalid pagination endpoint", method)
 	}
 	query, err := url.ParseQuery(next.RawQuery)
@@ -159,7 +168,7 @@ func nextOffset(method, nextPath string, offset int, body map[string]any) (int, 
 	body["offset"] = nextOffset
 	if value := query.Get("limit"); value != "" {
 		limit, err := strconv.Atoi(value)
-		if err != nil || limit < 1 || limit > 100 {
+		if err != nil || limit < 1 || limit > maxPageLimit {
 			return 0, fmt.Errorf("%s: invalid pagination limit", method)
 		}
 		body["limit"] = limit
@@ -167,19 +176,11 @@ func nextOffset(method, nextPath string, offset int, body map[string]any) (int, 
 	return nextOffset, nil
 }
 
-// maxAttempts bounds requests per call: one original + one 429 retry.
-const maxAttempts = 2
-
-// maxRetryDelay caps the Retry-After wait so agents never hang for long.
-const maxRetryDelay = 10 * time.Second
-
-var methodPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*\.[A-Za-z][A-Za-z0-9_]*$`)
-
 // post performs one API call, retrying once on 429 per the Retry-After
 // header, and returns the full envelope.
-func (c *Client) post(ctx context.Context, method string, body any) (*envelope, error) {
-	if !methodPattern.MatchString(method) {
-		return nil, fmt.Errorf("invalid API method %q: expected domain.action", method)
+func (c *Client) post(ctx context.Context, method Method, body any) (*envelope, error) {
+	if err := method.validate(); err != nil {
+		return nil, err
 	}
 	if body == nil {
 		body = map[string]any{}
@@ -205,8 +206,8 @@ func (c *Client) post(ctx context.Context, method string, body any) (*envelope, 
 }
 
 // doRequest sends one authenticated POST and closes the response after reading it.
-func (c *Client) doRequest(ctx context.Context, method string, payload []byte) ([]byte, *http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.BaseURL, "/")+"/api/"+method, bytes.NewReader(payload))
+func (c *Client) doRequest(ctx context.Context, method Method, payload []byte) ([]byte, *http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.BaseURL, "/")+"/api/"+method.String(), bytes.NewReader(payload))
 	if err != nil {
 		return nil, nil, fmt.Errorf("%s: %w", method, err)
 	}
@@ -225,7 +226,7 @@ func (c *Client) doRequest(ctx context.Context, method string, payload []byte) (
 }
 
 // decodeEnvelope parses the response body and rejects non-success envelopes.
-func decodeEnvelope(method string, raw []byte, status int) (*envelope, error) {
+func decodeEnvelope(method Method, raw []byte, status int) (*envelope, error) {
 	var env envelope
 	if err := json.Unmarshal(raw, &env); err != nil {
 		return nil, fmt.Errorf("%s: HTTP %d: decoding response: %w", method, status, err)
@@ -237,7 +238,7 @@ func decodeEnvelope(method string, raw []byte, status int) (*envelope, error) {
 }
 
 // retryWait sleeps per Retry-After until the context is canceled.
-func retryWait(ctx context.Context, method string, header http.Header) error {
+func retryWait(ctx context.Context, method Method, header http.Header) error {
 	wait := retryDelay(header.Get("Retry-After"))
 	select {
 	case <-ctx.Done():

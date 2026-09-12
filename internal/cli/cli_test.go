@@ -189,6 +189,7 @@ func TestUnsafeOrInvalidInputsDoNotReachAPI(t *testing.T) {
 		{"update", "d1", "--collection", "00000000-0000-0000-0000-000000000001"},
 		{"list", "--query", "absent"},
 		{"list", "--direction", "sideways"},
+		{"list", "--sort", "sideways"},
 		{"search", "x", "--limit", "0"},
 		{"users", "--offset", "-1"},
 		{"move", "d1", "--index", "-1"},
