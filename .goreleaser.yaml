@@ -1,0 +1,58 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+project_name: outline-cli
+
+builds:
+  - id: outline
+    main: ./cmd/outline
+    binary: outline
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - "-s -w -X github.com/yudhiesh-oc/outline-cli/internal/cli.version={{.Version}}"
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+release:
+  github:
+    owner: yudhiesh-oc
+    name: outline-cli
+  prerelease: auto
+  make_latest: true
+  preflight:
+    fail_on_error: true
+
+homebrew_casks:
+  - name: outline-cli
+    ids:
+      - default
+    binaries:
+      - outline
+    directory: Casks
+    homepage: https://github.com/yudhiesh-oc/outline-cli
+    description: Command-line client for the Outline knowledge base
+    license: MIT
+    skip_upload: auto
+    repository:
+      owner: yudhiesh-oc
+      name: homebrew-outline-cli
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
