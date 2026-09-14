@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"runtime/debug"
 	"strings"
 
 	urfave "github.com/urfave/cli/v3"
@@ -15,7 +16,39 @@ import (
 	"github.com/yudhiesh-oc/outline-cli/internal/outline"
 )
 
+// version is stamped by the release pipeline (-X ...internal/cli.version) and
+// stays "dev" for builds that carry no release stamp.
 var version = "dev"
+
+// reportedVersion returns the --version line: the release-stamped version when
+// present, otherwise the tagged module version Go records for `go install`
+// builds, and "dev" when neither is available.
+func reportedVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return version
+	}
+	return resolveVersion(version, info.Main.Version)
+}
+
+// releaseVersionRe matches a release tag such as v0.2.1 or v1.0.0-rc.1.
+var releaseVersionRe = regexp.MustCompile(`^v\d+\.\d+\.\d+(-[0-9A-Za-z.\-]+)?$`)
+
+// commitVersionRe matches the 14-digit timestamp Go embeds in the version of a
+// build made from an untagged or modified checkout.
+var commitVersionRe = regexp.MustCompile(`\d{14}`)
+
+// resolveVersion prefers the release stamp and shows a tagged module version
+// without its leading "v"; a build from an uncommitted tree stays "dev".
+func resolveVersion(stamped, module string) string {
+	if stamped != "dev" {
+		return stamped
+	}
+	if !releaseVersionRe.MatchString(module) || commitVersionRe.MatchString(module) {
+		return stamped
+	}
+	return strings.TrimPrefix(module, "v")
+}
 
 // uuidRe validates the identifiers accepted for collections and documents.
 var uuidRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
@@ -46,7 +79,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 func newCommand(stdout, stderr io.Writer) *urfave.Command {
 	cmd := &urfave.Command{
 		Name:    "outline",
-		Version: version,
+		Version: reportedVersion(),
 		Usage:   "Search and manage an Outline workspace; summary JSON on stdout",
 		Description: fmt.Sprintf("Flags may appear before or after arguments; -- ends option parsing.\n"+
 			"Lists return one page by default; --all fails if the %d-page safety limit is reached.\n"+

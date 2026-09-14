@@ -22,7 +22,7 @@ Upgrade with `brew upgrade outline-cli`, remove with `brew uninstall outline-cli
 go install github.com/yudhiesh-oc/outline-cli/cmd/outline@latest
 ```
 
-The binary lands in `$(go env GOPATH)/bin`. `go install` builds report `dev` for `--version`; release binaries report the tagged version.
+The binary lands in `$(go env GOPATH)/bin`. `--version` reports the release version for tagged installs (Homebrew, `go install …@vX.Y.Z` or `@latest`) and `dev` for a build from an uncommitted working tree.
 
 ## Configure
 
@@ -47,11 +47,19 @@ Or a config file containing exactly these fields:
 
 The CLI reads the config file named by `OUTLINE_CONFIG`; with no `OUTLINE_CONFIG` it looks for `outline/config.json` in the OS user config directory — macOS `~/Library/Application Support/outline/config.json`, Linux `$XDG_CONFIG_HOME/outline/config.json` (default `~/.config/outline/config.json`), Windows `%AppData%\outline\config.json`.
 
+Store it at the default location for your OS:
+
 ```sh
 mkdir -p ~/.config/outline
 printf '%s\n' '{"url":"https://your-workspace.getoutline.com","apiKey":"ol_api_..."}' > ~/.config/outline/config.json
 chmod 600 ~/.config/outline/config.json
-export OUTLINE_CONFIG="$HOME/.config/outline/config.json"   # only needed off Linux
+```
+
+Or keep it anywhere and point `OUTLINE_CONFIG` at it — that path is read on every command, so the file must exist:
+
+```sh
+chmod 600 /path/to/config.json
+export OUTLINE_CONFIG=/path/to/config.json
 ```
 
 Rules that matter:
@@ -233,7 +241,7 @@ Each command prints the installed path as JSON and fails if a skill file already
 | `HTTP 429` | Rate limited; narrow the request or retry later. |
 | `documents.info: HTTP 400: id: Must be a valid UUID or slug` | Pass an `id` or `urlId` from a listing command, not a full document URL. |
 | `decoding response: invalid character '<'` | Something other than the API answered (proxy, SSO page); check `OUTLINE_URL`. |
-| `--version` prints `dev` | Expected for `go install` builds; release binaries print the tag. |
+| `--version` prints `dev` | The binary was built from an uncommitted working tree: install a release (`brew install …`, `go install …@latest`) or build from a tagged checkout. |
 
 ## License
 
