@@ -56,7 +56,7 @@ export OUTLINE_CONFIG="$HOME/.config/outline/config.json"   # only needed off Li
 
 Rules that matter:
 
-- `OUTLINE_URL` is the workspace base URL: absolute `http://` or `https://`, no `/api` suffix, no query, no fragment. Self-hosted paths such as `https://kb.example.com/outline` are supported.
+- `OUTLINE_URL` is the workspace base URL: absolute `http://` or `https://`, no `/api` suffix, no query, no fragment, and a trailing slash is ignored. Self-hosted paths such as `https://kb.example.com/outline` are supported.
 - Environment variables win over the config file. A complete `OUTLINE_URL` + `OUTLINE_API_KEY` pair is used as-is; otherwise the config file supplies the missing value.
 - A key saved in the config file is only used with the URL saved next to it. Overriding the URL is refused unless `OUTLINE_API_KEY` is also set.
 - Setting `OUTLINE_CONFIG` to a missing file is an error even when both environment variables are set.
@@ -78,7 +78,7 @@ Read:
 | Command | Returns |
 | --- | --- |
 | `outline search <query> [--collection UUID] [--limit N] [--offset N] [--all]` | Ranked hits; each has `document`, `context`, and `ranking`. |
-| `outline get <id-or-urlId>` | One document including its markdown `text`. |
+| `outline get <id-or-urlId>` | One document including its markdown `text`. Pass a document `id` (UUID) or the `urlId` from a document URL, e.g. `runbook-deploy-abc123`. |
 | `outline list [--collection UUID] [--parent UUID] [--sort F] [--direction asc\|desc] [--limit N] [--offset N] [--all]` | Document metadata. `--sort` is `updatedAt`, `createdAt`, `title`, or `index`. |
 | `outline collections [name-filter]` | Collections with `id`, `name`, `url`, `permission`, `documentsCount`. |
 | `outline tree <collectionId>` | Complete published hierarchy of a collection. |
@@ -102,7 +102,7 @@ Escape hatches:
 
 | Command | Notes |
 | --- | --- |
-| `outline api <domain.action> [--data JSON]` | Any Outline REST method, e.g. `documents.unpublish`, `comments.resolve`, `collections.info`. Output is always raw. |
+| `outline api <domain.action> [--data JSON]` | Any Outline REST method, e.g. `documents.unpublish`, `comments.resolve`, `collections.info`. `--data` takes one JSON object; omitting it sends `{}`. Output is always raw. |
 | `outline skill install <harness> [--force]` | Installs the bundled agent skill (see below). |
 
 Every list command takes `--limit` (1–100, default 25), `--offset`, and `--all`. `--all` follows pagination up to 50 pages and then fails instead of returning partial results; prefer bounded `--limit`/`--offset` for large workspaces.
@@ -168,7 +168,6 @@ outline api collections.info --data '{"id":"COLLECTION_UUID"}'
 
 - stdout is compact JSON on one line; errors go to stderr as `outline: <message>`. Exit codes: `0` success, `1` API/runtime/output failure, `2` usage error.
 - Summaries keep the fields an agent needs and drop document bodies and editor JSON. Add the global `--raw` flag (`outline get DOC_ID --raw` or `outline --raw get DOC_ID`) for the full REST payload; `outline api` is always raw.
-- `get` keeps `text`; `search` keeps `context` and `ranking`; `list` and `move` keep hierarchy metadata; `collections`, `users`, `templates`, and `comments` keep their own fields; `tree` is returned unfiltered.
 - Mutations return a receipt, not the new body: re-read with `outline get` when you need the content.
 - Relative `url` values such as `/doc/runbook-deploy-abc123` are workspace-relative; prefix them with `OUTLINE_URL` to open them.
 - Only an HTTP 429 is retried automatically — once, honoring `Retry-After` up to 10 seconds. Every other failure (API error, timeout, or an unwritable stdout) stops immediately and prints `outline: <method>: HTTP <status>: <detail>`, so re-read with `outline get` before repeating a write.
@@ -182,6 +181,23 @@ $ outline search "deploy runbook" --limit 1
 $ outline search "deploy runbook" --limit 1 | jq -r '.[0].document | "\(.title) → \(.id)"'
 Runbook: deploy → d1a2b3c4-0000-0000-0000-000000000001
 ```
+
+### Summary fields
+
+Summaries keep these fields, and drop fields the API does not return; the JSON object itself has its keys sorted alphabetically:
+
+| Command | Fields |
+| --- | --- |
+| `get` | `id`, `title`, `url`, `text`, `collectionId`, `parentDocumentId`, `updatedAt`, `revision`, `revisionCount`, `publishedAt`, `archivedAt`, `deletedAt` |
+| `search` | `context`, `ranking`, and a `document` with the `list` fields |
+| `list`, `move` | `id`, `title`, `url`, `collectionId`, `parentDocumentId`, `updatedAt`, `publishedAt`, `archivedAt` |
+| `create`, `update`, `archive`, `restore` | `id`, `title`, `url`, `success`, `updatedAt`, `revision`, `revisionCount`, `publishedAt`, `archivedAt`, `deletedAt` |
+| `delete` | `success` |
+| `collections` | `id`, `name`, `url`, `description`, `permission`, `documentsCount` |
+| `users` | `id`, `name`, `email`, `role`, `isSuspended` |
+| `templates` | `id`, `title`, `collectionId`, `updatedAt` |
+| `comments`, `comment` | `id`, `documentId`, `parentCommentId`, `text`, `createdBy`, `createdAt`, `updatedAt`, `resolvedAt`, `resolvedBy` — plus `data` when the API returns editor JSON without computed `text` |
+| `tree` | unfiltered hierarchy; `--raw` is not needed |
 
 ## Install the Outline skill in LLM harnesses
 
